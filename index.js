@@ -221,13 +221,12 @@
             try {
               findInReactTree(tree, function (c) {
                 var n = nameOf(c);
-                if (n && seen.indexOf(n) < 0 && seen.length < 15) seen.push(n);
+                if (n && seen.indexOf(n) < 0 && seen.length < 80) seen.push(n);
                 return false;
               });
             } catch (e) {}
-            showToast(
-              "VM: ما لقيت مكان القسم (children=" + !!children + ", userId=" + !!userId + ") | " + seen.join(", ")
-            );
+            try { common.clipboard.setString(seen.join("\n")); } catch (e) {}
+            showToast("VM: ما لقيت مكان القسم، نسخت الأسماء للحافظة (" + seen.length + ")");
           }
           return;
         }
@@ -241,8 +240,46 @@
     );
   }
 
+  // حقن مباشر في مكوّن البايو (يظهر القسم بعد البايو مباشرة)
+  var BIO_CANDIDATES = [
+    "UserProfileBio",
+    "UserProfileAboutMeCard",
+    "UserProfileAboutMe",
+    "UserProfileAboutMeSection",
+    "SimplifiedUserProfileAboutMeCard",
+    "UserProfileBioSection"
+  ];
+  var patchedBios = [];
+
+  function patchBio(name) {
+    if (patchedBios.length > 0) return; // نحقن مرة وحدة بس عشان ما يتكرر القسم
+    var C;
+    try { C = findByTypeName(name); } catch (e) {}
+    if (!C) return;
+    patchedBios.push(name);
+    unpatches.push(
+      after("type", C, function (args, ret) {
+        var props = args[0] || {};
+        var userId = props.userId || (props.user && props.user.id);
+        if (!userId) return;
+        if (!injected) {
+          injected = true;
+          showToast("VM: تم حقن القسم بعد البايو (" + name + ")");
+        }
+        return React.createElement(
+          React.Fragment,
+          null,
+          ret,
+          React.createElement(MemorySection, { userId: userId })
+        );
+      })
+    );
+  }
+
   exports.onLoad = function () {
     FluxDispatcher.subscribe("VOICE_STATE_UPDATES", onVoiceUpdate);
+
+    BIO_CANDIDATES.forEach(patchBio);
 
     var UserProfile = findByTypeName("UserProfile") || findByTypeName("UserProfileContent");
     patchProfile(UserProfile, ["UserProfileBio", "UserProfileAboutMeCard"]);
@@ -250,7 +287,10 @@
     var Simplified = findByTypeName("SimplifiedUserProfileContent");
     patchProfile(Simplified, ["SimplifiedUserProfileAboutMeCard"]);
 
-    showToast("VM تحمّل | UserProfile=" + !!UserProfile + " | Simplified=" + !!Simplified);
+    showToast(
+      "VM تحمّل | UserProfile=" + !!UserProfile + " | Simplified=" + !!Simplified +
+      " | bio=" + (patchedBios.join(",") || "ما لقيت")
+    );
   };
 
   exports.onUnload = function () {
