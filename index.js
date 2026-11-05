@@ -131,7 +131,6 @@
       React.createElement(
         View,
         { style: styles.card },
-        // العنوان + عدد المرات
         React.createElement(
           View,
           { style: styles.header },
@@ -142,7 +141,6 @@
             saved ? "قابلته " + p.count + " مرة • آخر مرة " + fmt(p.last) : "ما قابلته بعد في روم"
           )
         ),
-        // النجوم (الضغط على نفس النجمة مرة ثانية يصفّر التقييم)
         React.createElement(
           View,
           { style: styles.starsRow },
@@ -170,7 +168,6 @@
             p.rating ? p.rating + "/5" : "بدون تقييم"
           )
         ),
-        // الرأي
         React.createElement(Text, { style: styles.opinionLabel }, "الرأي"),
         React.createElement(TextInput, {
           style: styles.input,
@@ -191,29 +188,50 @@
   var warned = false;
   var injected = false;
 
+  var NAME_RE = /(Bio|AboutMe|Note|Connection)/i;
+
+  function nameOf(el) {
+    if (!el || !el.type) return "";
+    return el.type.displayName || el.type.name || "";
+  }
+
   function patchProfile(Component, bioNames) {
     if (!Component) return;
     unpatches.push(
       after("type", Component, function (args, tree) {
         var props = args[0];
+
+        // نبحث عن أي عنصر أطفاله مصفوفة وفيها البايو أو النوت أو الحسابات المرتبطة
         var found = findInReactTree(tree, function (c) {
-          return (
-            c && c.type && c.type.displayName === "View" &&
-            c.props && c.props.children && c.props.children.findIndex &&
-            c.props.children.findIndex(function (l) {
-              return l && l.type && bioNames.indexOf(l.type.name) >= 0;
-            }) >= 0
-          );
+          var ch = c && c.props && c.props.children;
+          if (!Array.isArray(ch)) return false;
+          return ch.some(function (l) {
+            var n = nameOf(l);
+            return n && (bioNames.indexOf(n) >= 0 || NAME_RE.test(n));
+          });
         });
+
         var children = found && found.props && found.props.children;
         var userId = props && (props.userId || (props.user && props.user.id));
+
         if (!children || !userId) {
           if (!warned) {
             warned = true;
-            showToast("VM: لقيت البروفايل بس ما لقيت مكان القسم (children=" + !!children + ", userId=" + !!userId + ")");
+            var seen = [];
+            try {
+              findInReactTree(tree, function (c) {
+                var n = nameOf(c);
+                if (n && seen.indexOf(n) < 0 && seen.length < 15) seen.push(n);
+                return false;
+              });
+            } catch (e) {}
+            showToast(
+              "VM: ما لقيت مكان القسم (children=" + !!children + ", userId=" + !!userId + ") | " + seen.join(", ")
+            );
           }
           return;
         }
+
         if (!injected) {
           injected = true;
           showToast("VM: تم حقن القسم");
