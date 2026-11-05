@@ -230,6 +230,33 @@
     });
   }
 
+  // وصف مختصر لشكل أي كائن (للتشخيص فقط)
+  function shape(v, d) {
+    try {
+      if (v === null) return "null";
+      if (v === undefined) return "undefined";
+      var t = typeof v;
+      if (t === "function") return "fn:" + (v.displayName || v.name || "anon");
+      if (t === "symbol") return "symbol";
+      if (t !== "object") return t + ":" + String(v).slice(0, 24);
+      if (d <= 0) {
+        return Array.isArray(v) ? "array(" + v.length + ")" : "{" + Object.keys(v).slice(0, 12).join(",") + "}";
+      }
+      if (Array.isArray(v)) {
+        return "[" + v.slice(0, 4).map(function (x) { return shape(x, d - 1); }).join(" | ") + "]#" + v.length;
+      }
+      var out = [];
+      Object.keys(v).slice(0, 14).forEach(function (k) {
+        var s;
+        try { s = shape(v[k], d - 1); } catch (e) { s = "err"; }
+        out.push(k + "=" + s);
+      });
+      return "{" + out.join("; ") + "}";
+    } catch (e) {
+      return "shape-error";
+    }
+  }
+
   function collectNames(node, seen) {
     walkTree(node, function (c) {
       var n = nameOf(c);
@@ -298,6 +325,8 @@
             collectNames(ret, seen);
             var seenPages = [];
             pageList.forEach(function (pg) { collectNames(pg, seenPages); });
+            info.push("RET_SHAPE: " + shape(ret, 4));
+            info.push("STATE_SHAPE: " + shape(props.state, 4));
             info.push("RET_NAMES: " + seen.join(", "));
             info.push("PAGES_NAMES: " + seenPages.join(", "));
             try { common.clipboard.setString(info.join("\n")); } catch (e) {}
