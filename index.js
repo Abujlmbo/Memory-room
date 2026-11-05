@@ -187,6 +187,8 @@
   var unpatches = [];
   var warned = false;
   var injected = false;
+  var lastProfileUserId = null;
+  var warnedPages = false;
 
   var NAME_RE = /(Bio|AboutMe|Note|Connection)/i;
 
@@ -213,6 +215,7 @@
 
         var children = found && found.props && found.props.children;
         var userId = props && (props.userId || (props.user && props.user.id));
+        if (userId) lastProfileUserId = userId;
 
         if (!children || !userId) {
           if (!warned) {
@@ -238,6 +241,67 @@
         children.push(React.createElement(MemorySection, { userId: userId }));
       })
     );
+  }
+
+  // الحقن في صفحات التبويب (نفس طريقة ReviewDB في البروفايل الجديد)
+  var PAGES_RE = /(Bio|AboutMe|MemberSince)/i;
+
+  function patchPages() {
+    var finder =
+      metro.findByFilePath ||
+      (typeof bunny !== "undefined" && bunny.metro && bunny.metro.findByFilePath);
+    var Pages;
+    try {
+      Pages = finder && finder("design/components/SegmentedControl/native/SegmentedControlPages.native.tsx");
+    } catch (e) {}
+    if (!Pages) return false;
+
+    unpatches.push(
+      after("SegmentedControlPages", Pages, function (args, ret) {
+        var userId = lastProfileUserId;
+        if (!userId) return;
+
+        var found = findInReactTree(ret, function (c) {
+          var ch = c && c.props && c.props.children;
+          if (!Array.isArray(ch)) return false;
+          return ch.some(function (l) {
+            var n = nameOf(l);
+            return n && PAGES_RE.test(n);
+          });
+        });
+        var children = found && found.props && found.props.children;
+
+        if (!children) {
+          if (!warnedPages) {
+            warnedPages = true;
+            var seen = [];
+            try {
+              findInReactTree(ret, function (c) {
+                var n = nameOf(c);
+                if (n && seen.indexOf(n) < 0 && seen.length < 80) seen.push(n);
+                return false;
+              });
+            } catch (e) {}
+            try { common.clipboard.setString("PAGES\n" + seen.join("\n")); } catch (e) {}
+            showToast("VM: ما لقيت البايو داخل التبويبات، نسخت الأسماء (" + seen.length + ")");
+          }
+          return;
+        }
+
+        var el = React.createElement(MemorySection, { userId: userId, key: "vm-memory" });
+        try {
+          var idx = children.findIndex(function (c) { return c && c.type === MemorySection; });
+          if (idx >= 0) children[idx] = el;
+          else children.push(el);
+        } catch (e) {}
+
+        if (!injected) {
+          injected = true;
+          showToast("VM: تم حقن القسم في تبويب Main");
+        }
+      })
+    );
+    return true;
   }
 
   // حقن مباشر في مكوّن البايو (يظهر القسم بعد البايو مباشرة)
@@ -280,6 +344,7 @@
     FluxDispatcher.subscribe("VOICE_STATE_UPDATES", onVoiceUpdate);
 
     BIO_CANDIDATES.forEach(patchBio);
+    var pagesOk = patchPages();
 
     var UserProfile = findByTypeName("UserProfile") || findByTypeName("UserProfileContent");
     patchProfile(UserProfile, ["UserProfileBio", "UserProfileAboutMeCard"]);
@@ -289,7 +354,8 @@
 
     showToast(
       "VM تحمّل | UserProfile=" + !!UserProfile + " | Simplified=" + !!Simplified +
-      " | bio=" + (patchedBios.join(",") || "ما لقيت")
+      " | bio=" + (patchedBios.join(",") || "ما لقيت") +
+      " | pages=" + pagesOk
     );
   };
 
