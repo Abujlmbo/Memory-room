@@ -1,1 +1,15 @@
-
+{
+  "name": "Voice Memory",
+  "description": "يسجل الناس اللي تدخل معهم روم صوتي، ويضيف قسم 'ذاكرتي' في بروفايلهم (عدد المرات، تقييم، ملاحظة). البيانات محلية وخاصة فيك بس.",
+  "authors": [
+    {
+      "name": "You",
+      "id": "0"
+    }
+  ],
+  "main": "index.js",
+  "hash": "125dcf9347bc99e444b0da93dc932fc3d7973050d833e3cf5f65ca1539178f33",
+  "vendetta": {
+    "icon": "ionicons/people"
+  }
+}
