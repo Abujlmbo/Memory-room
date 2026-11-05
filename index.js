@@ -13,7 +13,7 @@
   var useProxy = vstorage.useProxy;
   var semanticColors = ui.semanticColors;
   var showToast = toasts.showToast;
-  var ErrorBoundary = components.ErrorBoundary;
+  var ErrorBoundary = components.ErrorBoundary || React.Fragment;
 
   var View = ReactNative.View;
   var Text = ReactNative.Text;
@@ -188,6 +188,8 @@
 
   /* ---------- الحقن في البروفايل ---------- */
   var unpatches = [];
+  var warned = false;
+  var injected = false;
 
   function patchProfile(Component, bioNames) {
     if (!Component) return;
@@ -205,7 +207,17 @@
         });
         var children = found && found.props && found.props.children;
         var userId = props && (props.userId || (props.user && props.user.id));
-        if (!children || !userId) return;
+        if (!children || !userId) {
+          if (!warned) {
+            warned = true;
+            showToast("VM: لقيت البروفايل بس ما لقيت مكان القسم (children=" + !!children + ", userId=" + !!userId + ")");
+          }
+          return;
+        }
+        if (!injected) {
+          injected = true;
+          showToast("VM: تم حقن القسم");
+        }
         children.push(React.createElement(MemorySection, { userId: userId }));
       })
     );
@@ -219,6 +231,8 @@
 
     var Simplified = findByTypeName("SimplifiedUserProfileContent");
     patchProfile(Simplified, ["SimplifiedUserProfileAboutMeCard"]);
+
+    showToast("VM تحمّل | UserProfile=" + !!UserProfile + " | Simplified=" + !!Simplified);
   };
 
   exports.onUnload = function () {
