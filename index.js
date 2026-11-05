@@ -8,7 +8,6 @@
   var FluxDispatcher = common.FluxDispatcher;
   var stylesheet = common.stylesheet;
   var after = patcher.after;
-  var findInReactTree = utils.findInReactTree;
   var storage = plugin.storage;
   var useProxy = vstorage.useProxy;
   var semanticColors = ui.semanticColors;
@@ -183,69 +182,75 @@
     );
   }
 
-  /* ---------- الحقن في البروفايل ---------- */
+  /* ---------- أدوات بحث آمنة في شجرة React ---------- */
   var unpatches = [];
-  var warned = false;
   var injected = false;
   var lastProfileUserId = null;
   var warnedPages = false;
 
-  var NAME_RE = /(Bio|AboutMe|Note|Connection)/i;
+  var PAGES_RE = /(Bio|AboutMe|MemberSince)/i;
 
   function nameOf(el) {
-    if (!el || !el.type) return "";
-    return el.type.displayName || el.type.name || "";
+    try {
+      if (!el || typeof el !== "object" || !el.type) return "";
+      var t = el.type;
+      if (typeof t === "string") return t;
+      return t.displayName || t.name || (t.type && (t.type.displayName || t.type.name)) || "";
+    } catch (e) {
+      return "";
+    }
   }
 
-  function patchProfile(Component, bioNames) {
+  // بحث يدوي بدون findInReactTree (ما يرمي أخطاء)
+  function walkTree(node, cb, depth) {
+    depth = depth || 0;
+    if (!node || typeof node !== "object" || depth > 40) return null;
+    if (Array.isArray(node)) {
+      for (var i = 0; i < node.length; i++) {
+        var r = walkTree(node[i], cb, depth + 1);
+        if (r) return r;
+      }
+      return null;
+    }
+    var hit = false;
+    try { hit = cb(node); } catch (e) {}
+    if (hit) return node;
+    var ch;
+    if (node.props && node.props.children !== undefined) ch = node.props.children;
+    else if (node.children !== undefined) ch = node.children;
+    return walkTree(ch, cb, depth + 1);
+  }
+
+  function hasBioChild(c) {
+    var ch = c && c.props && c.props.children;
+    if (!Array.isArray(ch)) return false;
+    return ch.some(function (l) {
+      var n = nameOf(l);
+      return n && PAGES_RE.test(n);
+    });
+  }
+
+  function collectNames(node, seen) {
+    walkTree(node, function (c) {
+      var n = nameOf(c);
+      if (n && seen.indexOf(n) < 0 && seen.length < 100) seen.push(n);
+      return false;
+    });
+  }
+
+  /* ---------- نلتقط userId من شاشة البروفايل الرئيسية ---------- */
+  function patchProfile(Component) {
     if (!Component) return;
     unpatches.push(
-      after("type", Component, function (args, tree) {
+      after("type", Component, function (args) {
         var props = args[0];
-
-        // نبحث عن أي عنصر أطفاله مصفوفة وفيها البايو أو النوت أو الحسابات المرتبطة
-        var found = findInReactTree(tree, function (c) {
-          var ch = c && c.props && c.props.children;
-          if (!Array.isArray(ch)) return false;
-          return ch.some(function (l) {
-            var n = nameOf(l);
-            return n && (bioNames.indexOf(n) >= 0 || NAME_RE.test(n));
-          });
-        });
-
-        var children = found && found.props && found.props.children;
         var userId = props && (props.userId || (props.user && props.user.id));
         if (userId) lastProfileUserId = userId;
-
-        if (!children || !userId) {
-          if (!warned) {
-            warned = true;
-            var seen = [];
-            try {
-              findInReactTree(tree, function (c) {
-                var n = nameOf(c);
-                if (n && seen.indexOf(n) < 0 && seen.length < 80) seen.push(n);
-                return false;
-              });
-            } catch (e) {}
-            try { common.clipboard.setString(seen.join("\n")); } catch (e) {}
-            showToast("VM: ما لقيت مكان القسم، نسخت الأسماء للحافظة (" + seen.length + ")");
-          }
-          return;
-        }
-
-        if (!injected) {
-          injected = true;
-          showToast("VM: تم حقن القسم");
-        }
-        children.push(React.createElement(MemorySection, { userId: userId }));
       })
     );
   }
 
-  // الحقن في صفحات التبويب (نفس طريقة ReviewDB في البروفايل الجديد)
-  var PAGES_RE = /(Bio|AboutMe|MemberSince)/i;
-
+  /* ---------- الحقن في صفحات التبويب (مثل ReviewDB) ---------- */
   function patchPages() {
     var finder =
       metro.findByFilePath ||
@@ -261,29 +266,42 @@
         var userId = lastProfileUserId;
         if (!userId) return;
 
-        var found = findInReactTree(ret, function (c) {
-          var ch = c && c.props && c.props.children;
-          if (!Array.isArray(ch)) return false;
-          return ch.some(function (l) {
-            var n = nameOf(l);
-            return n && PAGES_RE.test(n);
-          });
-        });
+        var props = args[0] || {};
+        var pages = props.pages;
+        var pageList = Array.isArray(pages)
+          ? pages
+          : pages && typeof pages === "object"
+          ? Object.keys(pages).map(function (k) { return pages[k]; })
+          : [];
+
+        // 1) نبحث في الناتج 2) ثم داخل الصفحات الممرّرة
+        var found = walkTree(ret, hasBioChild);
+        if (!found) {
+          for (var i = 0; i < pageList.length && !found; i++) {
+            found = walkTree(pageList[i], hasBioChild);
+          }
+        }
         var children = found && found.props && found.props.children;
 
         if (!children) {
           if (!warnedPages) {
             warnedPages = true;
+            var info = [];
+            info.push("retType=" + typeof ret + " retName=" + nameOf(ret));
+            try { info.push("propsKeys=" + Object.keys(props).join(",")); } catch (e) {}
+            info.push("pages=" + (Array.isArray(pages) ? "array(" + pages.length + ")" : typeof pages));
+            if (pageList[0] && typeof pageList[0] === "object") {
+              try { info.push("page0Keys=" + Object.keys(pageList[0]).join(",")); } catch (e) {}
+              info.push("page0Children=" + typeof pageList[0].children + " " + nameOf(pageList[0].children));
+            }
             var seen = [];
-            try {
-              findInReactTree(ret, function (c) {
-                var n = nameOf(c);
-                if (n && seen.indexOf(n) < 0 && seen.length < 80) seen.push(n);
-                return false;
-              });
-            } catch (e) {}
-            try { common.clipboard.setString("PAGES\n" + seen.join("\n")); } catch (e) {}
-            showToast("VM: ما لقيت البايو داخل التبويبات، نسخت الأسماء (" + seen.length + ")");
+            collectNames(ret, seen);
+            var seenPages = [];
+            pageList.forEach(function (pg) { collectNames(pg, seenPages); });
+            info.push("RET_NAMES: " + seen.join(", "));
+            info.push("PAGES_NAMES: " + seenPages.join(", "));
+            try { common.clipboard.setString(info.join("\n")); } catch (e) {}
+            showToast("VM: ما لقيت البايو، نسخت تفاصيل للحافظة");
           }
           return;
         }
@@ -304,59 +322,17 @@
     return true;
   }
 
-  // حقن مباشر في مكوّن البايو (يظهر القسم بعد البايو مباشرة)
-  var BIO_CANDIDATES = [
-    "UserProfileBio",
-    "UserProfileAboutMeCard",
-    "UserProfileAboutMe",
-    "UserProfileAboutMeSection",
-    "SimplifiedUserProfileAboutMeCard",
-    "UserProfileBioSection"
-  ];
-  var patchedBios = [];
-
-  function patchBio(name) {
-    if (patchedBios.length > 0) return; // نحقن مرة وحدة بس عشان ما يتكرر القسم
-    var C;
-    try { C = findByTypeName(name); } catch (e) {}
-    if (!C) return;
-    patchedBios.push(name);
-    unpatches.push(
-      after("type", C, function (args, ret) {
-        var props = args[0] || {};
-        var userId = props.userId || (props.user && props.user.id);
-        if (!userId) return;
-        if (!injected) {
-          injected = true;
-          showToast("VM: تم حقن القسم بعد البايو (" + name + ")");
-        }
-        return React.createElement(
-          React.Fragment,
-          null,
-          ret,
-          React.createElement(MemorySection, { userId: userId })
-        );
-      })
-    );
-  }
-
   exports.onLoad = function () {
     FluxDispatcher.subscribe("VOICE_STATE_UPDATES", onVoiceUpdate);
 
-    BIO_CANDIDATES.forEach(patchBio);
+    var UserProfile = findByTypeName("UserProfile") || findByTypeName("UserProfileContent");
+    patchProfile(UserProfile);
+    var Simplified = findByTypeName("SimplifiedUserProfileContent");
+    patchProfile(Simplified);
+
     var pagesOk = patchPages();
 
-    var UserProfile = findByTypeName("UserProfile") || findByTypeName("UserProfileContent");
-    patchProfile(UserProfile, ["UserProfileBio", "UserProfileAboutMeCard"]);
-
-    var Simplified = findByTypeName("SimplifiedUserProfileContent");
-    patchProfile(Simplified, ["SimplifiedUserProfileAboutMeCard"]);
-
-    showToast(
-      "VM تحمّل | UserProfile=" + !!UserProfile + " | Simplified=" + !!Simplified +
-      " | bio=" + (patchedBios.join(",") || "ما لقيت") +
-      " | pages=" + pagesOk
-    );
+    showToast("VM تحمّل | profile=" + !!UserProfile + " | pages=" + pagesOk);
   };
 
   exports.onUnload = function () {
