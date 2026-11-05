@@ -102,8 +102,24 @@
 
   function MemorySection(props) {
     useProxy(storage);
-    var p = storage.people[props.userId];
-    if (!p) return null;
+    var id = props.userId;
+    var saved = storage.people[id];
+    // يظهر القسم لكل الناس؛ السجل ينحفظ أول ما تقيّم أو تكتب رأي
+    var p = saved || { count: 0, rating: 0, note: "", last: null };
+    var ensure = function () {
+      if (!storage.people[id]) {
+        var u = UserStore.getUser(id);
+        storage.people[id] = {
+          name: (u && u.username) || id,
+          first: Date.now(),
+          last: Date.now(),
+          count: 0,
+          rating: 0,
+          note: ""
+        };
+      }
+      return storage.people[id];
+    };
 
     var fmt = function (t) {
       return new Date(t).toLocaleDateString("ar-SA");
@@ -123,7 +139,7 @@
           React.createElement(
             Text,
             { style: styles.meta },
-            "قابلته " + p.count + " مرة • آخر مرة " + fmt(p.last)
+            saved ? "قابلته " + p.count + " مرة • آخر مرة " + fmt(p.last) : "ما قابلته بعد في روم"
           )
         ),
         // النجوم (الضغط على نفس النجمة مرة ثانية يصفّر التقييم)
@@ -137,7 +153,8 @@
                 key: n,
                 hitSlop: 4,
                 onPress: function () {
-                  p.rating = p.rating === n ? 0 : n;
+                  var r = ensure();
+                  r.rating = r.rating === n ? 0 : n;
                 }
               },
               React.createElement(
@@ -162,7 +179,7 @@
           placeholderTextColor: "#888",
           multiline: true,
           onChangeText: function (t) {
-            p.note = t;
+            ensure().note = t;
           }
         })
       )
