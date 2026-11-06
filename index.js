@@ -289,57 +289,47 @@
     if (!Pages) return false;
 
     unpatches.push(
-      after("SegmentedControlPages", Pages, function (args, ret) {
+      after("SegmentedControlPages", Pages, function (args) {
         var userId = lastProfileUserId;
         if (!userId) return;
 
-        var props = args[0] || {};
-        var pages = props.pages;
-        var pageList = Array.isArray(pages)
-          ? pages
-          : pages && typeof pages === "object"
-          ? Object.keys(pages).map(function (k) { return pages[k]; })
-          : [];
+        var state = args[0] && args[0].state;
+        var items = state && state.items;
+        if (!Array.isArray(items)) return;
 
-        // 1) نبحث في الناتج 2) ثم داخل الصفحات الممرّرة
-        var found = walkTree(ret, hasBioChild);
-        if (!found) {
-          for (var i = 0; i < pageList.length && !found; i++) {
-            found = walkTree(pageList[i], hasBioChild);
-          }
+        // نتأكد إنها صفحات البروفايل (Main + Activity)
+        var ids = items.map(function (i) { return i && i.id; });
+        if (ids.indexOf("main") < 0 || ids.indexOf("activity") < 0) return;
+
+        var mainItem = items[ids.indexOf("main")];
+        var page = mainItem && mainItem.page;
+        if (!page || !page.props) return;
+
+        // 1) نبحث عن مصفوفة أطفال فيها البايو
+        var found = walkTree(page, hasBioChild);
+        var target = found && found.props && found.props.children;
+
+        // 2) إذا ما لقينا، نحط القسم في آخر محتوى الصفحة
+        if (!Array.isArray(target)) {
+          var ch = page.props.children;
+          if (Array.isArray(ch)) target = ch;
+          else if (ch && ch.props && Array.isArray(ch.props.children)) target = ch.props.children;
         }
-        var children = found && found.props && found.props.children;
 
-        if (!children) {
+        if (!Array.isArray(target)) {
           if (!warnedPages) {
             warnedPages = true;
-            var info = [];
-            info.push("retType=" + typeof ret + " retName=" + nameOf(ret));
-            try { info.push("propsKeys=" + Object.keys(props).join(",")); } catch (e) {}
-            info.push("pages=" + (Array.isArray(pages) ? "array(" + pages.length + ")" : typeof pages));
-            if (pageList[0] && typeof pageList[0] === "object") {
-              try { info.push("page0Keys=" + Object.keys(pageList[0]).join(",")); } catch (e) {}
-              info.push("page0Children=" + typeof pageList[0].children + " " + nameOf(pageList[0].children));
-            }
-            var seen = [];
-            collectNames(ret, seen);
-            var seenPages = [];
-            pageList.forEach(function (pg) { collectNames(pg, seenPages); });
-            info.push("RET_SHAPE: " + shape(ret, 4));
-            info.push("STATE_SHAPE: " + shape(props.state, 4));
-            info.push("RET_NAMES: " + seen.join(", "));
-            info.push("PAGES_NAMES: " + seenPages.join(", "));
-            try { common.clipboard.setString(info.join("\n")); } catch (e) {}
-            showToast("VM: ما لقيت البايو، نسخت تفاصيل للحافظة");
+            try { common.clipboard.setString("PAGE_SHAPE: " + shape(page, 5)); } catch (e) {}
+            showToast("VM: ما لقيت مكان داخل صفحة Main، نسخت التفاصيل");
           }
           return;
         }
 
         var el = React.createElement(MemorySection, { userId: userId, key: "vm-memory" });
         try {
-          var idx = children.findIndex(function (c) { return c && c.type === MemorySection; });
-          if (idx >= 0) children[idx] = el;
-          else children.push(el);
+          var idx = target.findIndex(function (c) { return c && c.type === MemorySection; });
+          if (idx >= 0) target[idx] = el;
+          else target.push(el);
         } catch (e) {}
 
         if (!injected) {
